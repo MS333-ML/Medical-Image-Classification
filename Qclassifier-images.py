@@ -13,6 +13,7 @@ import matplotlib
 import numpy as np
 from numpy import pi as PI
 from matplotlib import pyplot as plt
+import paddle
 
 from paddle import fluid
 from paddle.fluid.framework import ComplexVariable
@@ -45,24 +46,11 @@ for i in range(10):
     y.append(train_labels[i])
 show_images(X, y)
 tsne=TSNE(min_grad_norm=1e-5,init='pca',method='exact',angle=0.45,early_exaggeration=5,n_iter=1000)
-pca=PCA(n_components=2)
+pca=PCA(n_components=16)
 
 reduction_method = pca
 Q_code=reduction_method.fit_transform(train_data.reshape(train_data.shape[0], -1))
 Q1_code=reduction_method.fit_transform(test_data.reshape(test_data.shape[0], -1))
-
-for i in range(len(train_labels)):
-    if train_labels[i]== 1:
-        plt.scatter(Q_code.T[0][i],Q_code.T[1][i],color='r')
-    else:
-        plt.scatter(Q_code.T[0][i],Q_code.T[1][i],color='b')
-
-tmp = Q1_code.T
-for i in range(len(test_labels)):
-    if test_labels[i]== 1:
-        plt.scatter(tmp[0][i],tmp[1][i],color='r')
-    else:
-        plt.scatter(tmp[0][i],tmp[1][i],color='b')
 
 sum=0
 print(len(test_labels))
@@ -74,7 +62,6 @@ print(sum)
 QQQ_code=preprocessing.normalize(Q_code, norm="l1", axis=1)
 QQQ1_code=preprocessing.normalize(Q1_code, norm="l1", axis=1)
 
-QQQ_code.shape
 def myRy(theta):
     """
     :param theta: parameter
@@ -206,16 +193,17 @@ class Net(fluid.dygraph.Layer):
         Utheta = U_theta(self.theta, n=self.n, depth=self.depth)
         
         # 因为 Utheta是学习得到的，我们这里用行向量运算来提速而不会影响训练效果
-        state_out = (state_in, Utheta)  # 维度 [-1, 1, 2 ** n]
+        state_out = matmul(state_in, Utheta)  # 维度 [-1, 1, 2 ** n]
         
         # 测量得到泡利 Z 算符的期望值 <Z>
-        E_Z = matmul(matmul(state_out, Ob),
-                     transpose(ComplexVariable(state_out.real, -state_out.imag),
+        E_Z = matmul(matmul(state_out, Ob), transpose(ComplexVariable(state_out.real, -state_out.imag),
                                perm=[0, 2, 1]))
         
         # 映射 <Z> 处理成标签的估计值 
         state_predict = E_Z.real[:, 0] * 0.5 + 0.5 + self.bias
-        loss = fluid.layers.reduce_mean((state_predict - label_pp) ** 2)
+        # loss = fluid.layers.reduce_mean((state_predict - label_pp) ** 2 + 1.5 * (1.0 - label_pp) * (state_predict - label_pp))
+        label_pp = fluid.layers.reshape(label_pp, [label_pp.shape[0], 1])
+        loss = fluid.layers.cross_entropy(state_predict, label_pp, soft_label=True)
         #pdb.set_trace()
         # 计算交叉验证正确率
         #is_correct = fluid.layers.where(
@@ -231,6 +219,9 @@ with fluid.dygraph.guard():
     net = Net(n=4, depth=1, seed_paras=19)
     opt = fluid.optimizer.AdamOptimizer(learning_rate=0.01, parameter_list=net.parameters())
     
+    loss_step = []
+    loss_item = []
+
     for epoch in range(EPOCH):
         for i in range(len(train_data) // BATCH):
             step=step+1
@@ -252,6 +243,11 @@ with fluid.dygraph.guard():
             #is_correct = fluid.layers.where(
             #fluid.layers.abs(state - trainy) < 0.5)#.shape[0]
             #print('step:',i,'; loss:',loss)
+            
+            if step % 10 == 0:
+                loss_step.append(step)
+                loss_item.append(loss.numpy()[0])
+
             loss.backward()
             opt.minimize(loss)
             net.clear_gradients()
@@ -275,6 +271,4 @@ with fluid.dygraph.guard():
                     is_correct=is_correct.sum()
                     #pdb.set_trace()
                     summary_test_correct=summary_test_correct+is_correct
-                print( epoch ,summary_test_correct, test_labels.sum())
-
-
+                print( epoch ,summary_test_correct, len(test_labels))
