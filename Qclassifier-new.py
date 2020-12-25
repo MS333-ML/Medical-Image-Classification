@@ -48,13 +48,6 @@ def show_images(images, labels):
     plt.show()
 
 
-
-X, y = [], []
-for i in range(20):
-    X.append(train_data[i])
-    y.append(train_labels[i])
-show_images(X, y)
-
 tsne=TSNE(min_grad_norm=1e-5,init='pca',method='exact',angle=0.45,early_exaggeration=5,n_iter=1000)
 pca=PCA(n_components=hyper_params['n_components'])
 reduction_model = pca
@@ -235,13 +228,13 @@ class Net(fluid.dygraph.Layer):
 
 
 step=1
-BATCH = 1
+BATCH = 10
 EPOCH = 10
 total_loss = 0.0
 
 with fluid.dygraph.guard():
     net = Net(n=hyper_params['n_qubits'], depth=3, seed_paras=19)
-    opt = fluid.optimizer.AdamOptimizer(learning_rate=0.01, parameter_list=net.parameters())
+    opt = fluid.optimizer.AdamOptimizer(learning_rate=0.1, parameter_list=net.parameters())
     
     tr_ls = []
     for epoch in range(EPOCH):
@@ -291,11 +284,6 @@ with fluid.dygraph.guard():
                     input_test=fluid.dygraph.to_variable(datapoints_transform_to_state(input_test,n_qubits=hyper_params['n_qubits']))
                     loss, state=net(state_in=input_test,label=label_test)
                     is_correct=(np.abs(state.reshape(-1)-label_test)<0.5)+0
-                    #with open('state.txt', 'a') as f:
-                        #f.write(str(state)+'\n')
-                        #f.write(str(label_test)+'\n')
-                        #f.write(str(is_correct)+'\n')
-                        #f.write('\n')
                     is_correct=is_correct.sum()
                     #pdb.set_trace()
                     summary_test_correct=summary_test_correct+is_correct

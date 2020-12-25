@@ -217,7 +217,7 @@ BATCH = 4
 EPOCH = 4
 with fluid.dygraph.guard():
     net = Net(n=4, depth=1, seed_paras=19)
-    opt = fluid.optimizer.AdamOptimizer(learning_rate=0.01, parameter_list=net.parameters())
+    opt = fluid.optimizer.AdamOptimizer(learning_rate=0.001, parameter_list=net.parameters())
     
     loss_step = []
     loss_item = []
