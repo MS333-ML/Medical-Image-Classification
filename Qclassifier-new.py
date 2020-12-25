@@ -218,13 +218,13 @@ class Net(fluid.dygraph.Layer):
 
 
 step=1
-BATCH = 1
+BATCH = 2
 EPOCH = 10
 total_loss = 0.0
 
 with fluid.dygraph.guard():
     net = Net(n=hyper_params['n_qubits'], depth=3, seed_paras=19)
-    opt = fluid.optimizer.AdamOptimizer(learning_rate=0.01, parameter_list=net.parameters())
+    opt = fluid.optimizer.AdamOptimizer(learning_rate=0.05, parameter_list=net.parameters())
     
     tr_ls = []
     for epoch in range(EPOCH):
@@ -258,7 +258,7 @@ with fluid.dygraph.guard():
             data_len += BATCH
         
       
-            if (i) % 1000 ==0:
+            if (i) % 200 ==0:
                 print('------------------------------TEST---------------------------------')
                 summary_test_correct=0
                 for j in tqdm(range(test_len // BATCH)):
