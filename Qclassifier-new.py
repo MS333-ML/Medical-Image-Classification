@@ -37,7 +37,6 @@ test_data = npz_file['test_images']
 test_labels =  npz_file['test_labels']
 
 
-
 def show_images(images, labels):
     _, figs = plt.subplots(1, len(images), figsize=(28, 28))
     for f, img, lbl in zip(figs, images, labels):
@@ -48,44 +47,28 @@ def show_images(images, labels):
     plt.show()
 
 
+tsne=TSNE(n_components=hyper_params['n_components'],min_grad_norm=1e-5,init='pca',method='exact',angle=0.45,early_exaggeration=5,n_iter=1000)
+pca = PCA(n_components=hyper_params['n_components'])
 
-X, y = [], []
-for i in range(20):
-    X.append(train_data[i])
-    y.append(train_labels[i])
-show_images(X, y)
-
-tsne=TSNE(min_grad_norm=1e-5,init='pca',method='exact',angle=0.45,early_exaggeration=5,n_iter=1000)
-pca=PCA(n_components=hyper_params['n_components'])
 reduction_model = pca
+all_code = np.concatenate([train_data, test_data], axis=0)
+reduct_code=reduction_model.fit_transform(all_code.reshape(all_code.shape[0], -1))
 
-Q_code=reduction_model.fit_transform(train_data.reshape(train_data.shape[0], -1))
-Q1_code=reduction_model.fit_transform(test_data.reshape(test_data.shape[0], -1))
-sum=0
-print(len(test_labels))
-for i in range(len(test_labels)):
-    if test_labels[i]== 1:
-        sum=sum+1
-print(sum)
+Q_code = reduct_code[:train_data.shape[0]]
+Q1_code = reduct_code[train_data.shape[0]:]
 
-sum=0
-print(len(train_labels))
-for i in range(len(train_labels)):
-    if train_labels[i]== 1:
-        sum=sum+1
-print(sum)
+# Filter
+test_labels = test_labels[Q1_code[:,1]<1000.0, :]
+Q1_code = Q1_code[Q1_code[:,1]<1000.0, :]
 
+train_len = Q_code.shape[0]
+test_len = Q1_code.shape[0]
 
-sum=0
-print(len(val_labels))
-for i in range(len(val_labels)):
-    if val_labels[i]== 1:
-        sum=sum+1
-print(sum)
+all_code = np.concatenate([Q_code, Q1_code], axis=0)
+all_code = preprocessing.minmax_scale(all_code, feature_range=(-1.0+1e-5,1.0-1e-5), axis=0)
 
-QQQ_code = preprocessing.minmax_scale(Q_code, feature_range=(-1.0+1e-5,1.0-1e-5), axis=0)
-QQQ1_code = preprocessing.minmax_scale(Q1_code, feature_range=(-1.0+1e-5,1.0-1e-5), axis=0)
-
+QQQ_code = all_code[:train_len]
+QQQ1_code = all_code[train_len:]
 
 def myRy(theta):
     """
@@ -248,7 +231,7 @@ with fluid.dygraph.guard():
         print('Epoch', epoch)
         epoch_ls = 0
         data_len = 0
-        for i in range(len(train_data) // BATCH):
+        for i in range(train_len // BATCH):
             step=step+1
             #inputx=[]
             #pdb.set_trace()
@@ -278,7 +261,7 @@ with fluid.dygraph.guard():
             if (i) % 1000 ==0:
                 print('------------------------------TEST---------------------------------')
                 summary_test_correct=0
-                for j in tqdm(range(len(test_data) // BATCH)):
+                for j in tqdm(range(test_len // BATCH)):
                     #lll=test_data[j]
                     label_test=(test_labels[j * BATCH:(j + 1) * BATCH].reshape(-1))
                     label_test = np.asarray(label_test).astype('float64')
@@ -291,15 +274,10 @@ with fluid.dygraph.guard():
                     input_test=fluid.dygraph.to_variable(datapoints_transform_to_state(input_test,n_qubits=hyper_params['n_qubits']))
                     loss, state=net(state_in=input_test,label=label_test)
                     is_correct=(np.abs(state.reshape(-1)-label_test)<0.5)+0
-                    #with open('state.txt', 'a') as f:
-                        #f.write(str(state)+'\n')
-                        #f.write(str(label_test)+'\n')
-                        #f.write(str(is_correct)+'\n')
-                        #f.write('\n')
                     is_correct=is_correct.sum()
                     #pdb.set_trace()
                     summary_test_correct=summary_test_correct+is_correct
-                print( epoch ,summary_test_correct, len(test_labels))
+                print( epoch ,summary_test_correct, test_len)
                 #print( epoch ,acc, test_acc)
         tr_ls.append(epoch_ls / data_len)
         print('Loss:', epoch_ls / data_len)
