@@ -231,6 +231,8 @@ with fluid.dygraph.guard():
         print('Epoch', epoch)
         epoch_ls = 0
         data_len = 0
+        loss_arr = []
+
         for i in range(train_len // BATCH):
             step=step+1
             #inputx=[]
@@ -247,8 +249,7 @@ with fluid.dygraph.guard():
             trainy=np.asarray(inputy).astype('float64')
             #print('label:--',trainy)
             loss, state=net(state_in=input_data,label=trainy)
-            
-            
+
             total_loss += loss.numpy()[0]
 
             loss.backward()

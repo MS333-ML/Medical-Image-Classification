@@ -53,23 +53,27 @@ pca = PCA(n_components=hyper_params['n_components'])
 
 reduction_model = pca
 all_code = np.concatenate([train_data, test_data], axis=0)
-reduct_code=reduction_model.fit_transform(all_code.reshape(all_code.shape[0], -1))
+reduction_model.fit(all_code.reshape(all_code.shape[0], -1))
+reduct_code = reduction_model.transform(all_code.reshape(all_code.shape[0], -1))
 
 Q_code = reduct_code[:train_data.shape[0]]
 Q1_code = reduct_code[train_data.shape[0]:]
-
-# Filter
-test_labels = test_labels[Q1_code[:,1]<1000.0, :]
-Q1_code = Q1_code[Q1_code[:,1]<1000.0, :]
 
 train_len = Q_code.shape[0]
 test_len = Q1_code.shape[0]
 
 all_code = np.concatenate([Q_code, Q1_code], axis=0)
-all_code = preprocessing.minmax_scale(all_code, feature_range=(-1.0+1e-5,1.0-1e-5), axis=0)
+min_val = []
+max_val = []
 
-QQQ_code = all_code[:train_len]
-QQQ1_code = all_code[train_len:]
+for i in range(hyper_params['n_components']):
+    min_val.append(np.min(all_code[:,i]))
+    max_val.append(np.max(all_code[:,i]))
+
+pre_code = preprocessing.minmax_scale(all_code, feature_range=(-1.0+1e-5,1.0-1e-5), axis=0)
+
+QQQ_code = pre_code[:train_len]
+QQQ1_code = pre_code[train_len:]
 
 def myRy(theta):
     """
@@ -171,6 +175,11 @@ def Observable(n, measure_index=0):
     return Ob
 
 
+def transform_to_origin(a):
+    for i in range(hyper_params['n_components']):
+        a[i] = (a[i]+1.0)/2.0*(max_val[i]-min_val[i])+min_val[i]
+
+    return a
 
 class Net(fluid.dygraph.Layer):
     """
@@ -252,7 +261,6 @@ class Net(fluid.dygraph.Layer):
         return loss, output_state.numpy()
 
 
-
 step=1
 BATCH = 10
 EPOCH = 10
@@ -263,6 +271,10 @@ with fluid.dygraph.guard():
     opt = fluid.optimizer.AdamOptimizer(learning_rate=0.1, parameter_list=net.parameters())
     
     tr_ls = []
+
+    step_arr = []
+    loss_arr = []
+
     for epoch in range(EPOCH):
         print('Epoch', epoch)
         epoch_ls = 0
@@ -286,9 +298,31 @@ with fluid.dygraph.guard():
             #print('label:--',trainy)
             loss, state=net(state_in=input_data, origin_state=origin_res)
             total_loss += loss.numpy()[0]
-            
+
             if i % 20 == 0:
                 print(f'Epoch:{epoch}, Step:{i}, Loss:{loss.numpy()[0]}')
+                
+                # Show the pictures
+                pic = transform_to_origin(state[0, 0])
+                output_img = reduction_model.inverse_transform(pic).reshape(28, 28)
+                plt.imshow(output_img, cmap='gray')
+                plt.title(f'QAE Step: {step}')
+                plt.savefig('ae.png')
+                plt.close()
+
+                plt.imshow(train_data[i*BATCH], cmap='gray')
+                plt.title(f'Origin Step: {step}')
+                plt.savefig('origin.png')
+                plt.close()
+
+                step_arr.append(step)
+                loss_arr.append(loss.numpy()[0])
+                plt.plot(step_arr, loss_arr)
+                plt.title('Loss')
+                plt.xlabel('Step')
+                plt.ylabel('Loss')
+                plt.savefig('loss.png')
+                plt.close()
 
             loss.backward()
             opt.minimize(loss)
