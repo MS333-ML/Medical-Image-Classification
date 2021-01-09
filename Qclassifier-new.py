@@ -24,8 +24,8 @@ from paddle_quantum.utils import pauli_str_to_matrix
 
 # Hyper_params
 hyper_params = {
-    'n_components': 4,
-    'n_qubits': 4
+    'n_components': 2,
+    'n_qubits': 2
 }
 
 npz_file = np.load('datasets/pneumoniamnist.npz')
