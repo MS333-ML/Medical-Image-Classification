@@ -24,8 +24,8 @@ from paddle_quantum.utils import pauli_str_to_matrix
 
 # Hyper_params
 hyper_params = {
-    'n_components': 3,
-    'n_qubits': 3,
+    'n_components': 4,
+    'n_qubits': 4,
     'n_z': 2
 }
 
@@ -116,27 +116,6 @@ def datapoints_transform_to_state(data, n_qubits):
     res = np.array(res)
     origin_res = np.array(origin_res)
     return res.astype("complex128"), origin_res
-
-# 经典 -> 量子数据编码器 (为分类器准备)
-def datapoints_transform_to_state_for_classifier(data, n_qubits):
-    """
-    :param data: shape [-1, 2]
-    :param n_qubits: the number of qubits to which the data transformed
-    :return: shape [-1, 1, 2 ^ n_qubits]
-    """
-    dim1, dim2 = data.shape
-    res = []
-    for sam in range(dim1):
-        res_state = 1.
-        zero_state = np.array([[1, 0]])
-        for i in range(n_qubits):
-            state_tmp=np.dot(zero_state, myRy(np.arcsin(data[sam][i%hyper_params['n_components']])).T)
-            state_tmp=np.dot(state_tmp, myRz(np.arccos(data[sam][i%hyper_params['n_components']] ** 2)).T)
-            res_state=np.kron(res_state, state_tmp)
-        res.append(res_state)
-
-    res = np.array(res)
-    return res.astype("complex128")
 
 
 def U_theta(theta, n, depth):  
@@ -242,21 +221,6 @@ class Net(fluid.dygraph.Layer):
 
         self.Ob = [Observable(2*self.n-self.n_z, i) for i in range(self.n)]
 
-    def encoder(self, state_in):
-        # 按照随机初始化的参数 theta 
-        Encoder = AE_encoder(self.theta1, n=self.n, z_n=self.n_z, depth=self.depth)
-        
-        # State in to input state
-        initial_state = np.array([1]+[0]*(2**(self.n-self.n_z)-1)).astype('complex128')
-        initial_state = fluid.dygraph.to_variable(initial_state)
-        input_state = kron(initial_state, state_in)
-
-        # 因为 Utheta是学习得到的，我们这里用行向量运算来提速而不会影响训练效果
-        state_z = matmul(input_state, Encoder)
-
-        return state_z
-
-
     # 定义向前传播机制、计算损失函数 和交叉验证正确率
     def forward(self, state_in, origin_state):
         """
@@ -272,8 +236,8 @@ class Net(fluid.dygraph.Layer):
         Ob = self.Ob
 
         # 按照随机初始化的参数 theta 
-        Encoder = AE_encoder(self.theta1, n=self.n, z_n=self.n_z, depth=self.depth)
-        Decoder = AE_decoder(self.theta2, n=self.n, z_n=self.n_z, depth=self.depth)
+        Encoder = AE_encoder(self.theta1, n=self.n, z_n=2, depth=self.depth)
+        Decoder = AE_decoder(self.theta2, n=self.n, z_n=2, depth=self.depth)
         
         # State in to input state
         initial_state = np.array([1]+[0]*(2**(self.n-self.n_z)-1)).astype('complex128')
@@ -291,242 +255,81 @@ class Net(fluid.dygraph.Layer):
         
         output_state = fluid.layers.concat(E_Z, axis=-1)
 
-        # Calcualate Loss
+        # Calcualate Fidelity
         loss = fluid.layers.mean((output_state-origin_state)**2)
 
-        origin_len = fluid.layers.reduce_sum(origin_state**2, -1) ** 0.5
-        output_len = fluid.layers.reduce_sum(output_state**2, -1) ** 0.5
-        dot_product = fluid.layers.reduce_sum(output_state*origin_state, -1)
+        return loss, output_state.numpy()
 
-        fidelity = fluid.layers.mean(dot_product/origin_len/output_len)
 
-        return loss, fidelity, output_state.numpy()
-
-class Classifier(fluid.dygraph.Layer):
-    """
-    Construct the model net
-    """
-    def __init__(self,
-                 n,      # number of qubits
-                 n_z,
-                 depth,  # circuit depth
-                 net,
-                 seed_paras=1,
-                 dtype='float64'):
-        super(Classifier, self).__init__()
-
-        self.n = n
-        self.n_z = n_z
-        self.depth = depth
-        self.net = net
-        
-        # 初始化参数列表 theta，并用 [0, 2*pi] 的均匀分布来填充初始值
-        self.theta = self.create_parameter(
-            shape=[self.n_z, depth + 3],
-            attr=fluid.initializer.Uniform(
-                low=0.0, high=2*PI, seed=seed_paras),
-            dtype=dtype,
-            is_bias=False)
-        
-        # 初始化偏置 (bias)
-        self.bias = self.create_parameter(
-            shape=[1],
-            attr=fluid.initializer.NormalInitializer(
-                scale=0.01, seed=seed_paras + 10),
-            dtype=dtype,
-            is_bias=False)
-
-    # 定义向前传播机制、计算损失函数 和交叉验证正确率
-    def forward(self, state_in, label):
-        """
-        Args:
-            state_in: The input quantum state, shape [-1, 1, 2^n]
-            label: label for the input state, shape [-1, 1]
-        Returns:
-            The loss:
-                L = ((<Z> + 1)/2 + bias - label)^2
-        """
-        
-        state_z = self.net.encoder(state_in)
-        state_z = fluid.dygraph.to_variable(state_z.numpy())
-
-        # 我们需要将 Numpy array 转换成 Paddle 动态图模式中支持的 variable
-        unused_n = self.n - self.n_z
-        Ob = fluid.dygraph.to_variable(Observable(2*self.n-self.n_z, measure_index=unused_n))
-        label_pp = fluid.dygraph.to_variable(label)
-        # 按照随机初始化的参数 theta 
-        unused_n = self.n - self.n_z
-        Utheta = U_theta(self.theta, n=self.n_z, depth=self.depth)
-        empty_half = fluid.dygraph.to_variable(np.eye(2**unused_n).astype('complex128'))
-        Utheta = kron(empty_half, Utheta)
-        Utheta = kron(Utheta, empty_half)
-        
-        # 因为 Utheta是学习得到的，我们这里用行向量运算来提速而不会影响训练效果
-        state_out = matmul(state_z, Utheta)  # 维度 [-1, 1, 2 ** n]
-        
-        # 测量得到泡利 Z 算符的期望值 <Z>
-        E_Z = matmul(matmul(state_out, Ob),
-                     transpose(ComplexVariable(state_out.real, -state_out.imag),
-                               perm=[0, 2, 1]))
-        
-        # 映射 <Z> 处理成标签的估计值 
-        state_predict = E_Z.real[:, 0] * 0.5 + 0.5 + self.bias
-        loss = fluid.layers.reduce_mean((state_predict - label_pp) ** 2)
-
-        return loss, state_predict.numpy()
-
-def train_autoencoder():
-    print('Training Autoencoder...')
-    step=1
-    BATCH = 10
-    EPOCH = 1
-    total_loss = 0.0
-    total_fidelity = 0.0
-    fidelity_cnt = 0
-
-    with fluid.dygraph.guard():
-        opt = fluid.optimizer.AdamOptimizer(learning_rate=0.1, parameter_list=net.parameters())
-        
-        tr_ls = []
-
-        step_arr = []
-        loss_arr = []
-
-        for epoch in range(EPOCH):
-            print('Epoch', epoch)
-            epoch_ls = 0
-            data_len = 0
-            for i in range(train_len // BATCH):
-                step=step+1
-                inputx = QQQ_code[i * BATCH:(i + 1) * BATCH]
-                inputx=np.asarray(inputx)
-
-                trainx=np.array(inputx).astype('float64')
-                res, origin_res = datapoints_transform_to_state(trainx, n_qubits=hyper_params['n_qubits'])
-                input_data = fluid.dygraph.to_variable(res)
-                origin_res = fluid.dygraph.to_variable(origin_res)
-                #print(input_data)
-                inputy=(train_labels[i * BATCH:(i + 1) * BATCH].reshape(-1))  
-                #pdb.set_trace()
-                trainy=np.asarray(inputy).astype('float64')
-                #print('label:--',trainy)
-                loss, fidelity, state = net(state_in=input_data, origin_state=origin_res)
-                total_loss += loss.numpy()[0]
-                total_fidelity += fidelity.numpy()[0]
-                fidelity_cnt += 1
-
-                if i % 20 == 0:
-                    print(f'Epoch:{epoch}, Step:{i}, Loss:{loss.numpy()[0]}, Fidelity:{total_fidelity/fidelity_cnt}')
-
-                    fidelity_cnt = total_fidelity = 0
-                    
-                    # Show the pictures
-                    pic = transform_to_origin(state[0, 0])
-                    output_img = reduction_model.inverse_transform(pic).reshape(28, 28)
-                    plt.imshow(output_img, cmap='gray')
-                    plt.title(f'QAE Step: {step}')
-                    plt.savefig('ae.png')
-                    plt.close()
-
-                    plt.imshow(train_data[i*BATCH], cmap='gray')
-                    plt.title(f'Origin Step: {step}')
-                    plt.savefig('origin.png')
-                    plt.close()
-
-                    step_arr.append(step)
-                    loss_arr.append(loss.numpy()[0])
-                    plt.plot(step_arr, loss_arr)
-                    plt.title('Loss')
-                    plt.xlabel('Step')
-                    plt.ylabel('Loss')
-                    plt.savefig('loss.png')
-                    plt.close()
-
-                loss.backward()
-                opt.minimize(loss)
-                net.clear_gradients()
-                epoch_ls += loss.numpy().sum()
-                data_len += BATCH
-
-            tr_ls.append(epoch_ls / data_len)
-            print('Loss:', epoch_ls / data_len)
-        print(tr_ls)
-
-    return net
-
+step=1
+BATCH = 10
+EPOCH = 10
+total_loss = 0.0
 
 with fluid.dygraph.guard():
     net = Net(n=hyper_params['n_qubits'], depth=3, n_z=hyper_params['n_z'], seed_paras=19)
-    print('Loading autoencoder...')
-    try:
-        state_dict, _ = fluid.load_dygraph(f'qae_net_{hyper_params["n_qubits"]}_{hyper_params["n_z"]}')
-        net.set_dict(state_dict)
-    except Exception as err:
-        print(err)
-        train_autoencoder()
-        fluid.save_dygraph(net.state_dict(), f'qae_net_{hyper_params["n_qubits"]}_{hyper_params["n_z"]}')
-
-    print('Finished. Training Classifier...')
-
-    classifier = Classifier(n=hyper_params['n_qubits'], depth=3, n_z=hyper_params['n_z'], seed_paras=19, net=net)
-    opt = fluid.optimizer.AdamOptimizer(learning_rate=0.05, parameter_list=classifier.parameters())
+    opt = fluid.optimizer.AdamOptimizer(learning_rate=0.1, parameter_list=net.parameters())
     
-    step=1
-    BATCH = 2
-    EPOCH = 1
-    total_loss = 0.0
-
     tr_ls = []
+
+    step_arr = []
+    loss_arr = []
+
     for epoch in range(EPOCH):
         print('Epoch', epoch)
         epoch_ls = 0
         data_len = 0
-        loss_arr = []
-
         for i in range(train_len // BATCH):
             step=step+1
+            #inputx=[]
+            #pdb.set_trace()
+            #inputx.append(QQQ_code[i * BATCH:(i + 1) * BATCH])
             inputx = QQQ_code[i * BATCH:(i + 1) * BATCH]
             inputx=np.asarray(inputx)
 
             trainx=np.array(inputx).astype('float64')
-            input_data=fluid.dygraph.to_variable(datapoints_transform_to_state_for_classifier(trainx,n_qubits=hyper_params['n_qubits']))
+            res, origin_res = datapoints_transform_to_state(trainx, n_qubits=hyper_params['n_qubits'])
+            input_data = fluid.dygraph.to_variable(res)
+            origin_res = fluid.dygraph.to_variable(origin_res)
             #print(input_data)
             inputy=(train_labels[i * BATCH:(i + 1) * BATCH].reshape(-1))  
             #pdb.set_trace()
             trainy=np.asarray(inputy).astype('float64')
             #print('label:--',trainy)
-            loss, state=classifier(state_in=input_data,label=trainy)
-
+            loss, state=net(state_in=input_data, origin_state=origin_res)
             total_loss += loss.numpy()[0]
+
+            if i % 20 == 0:
+                print(f'Epoch:{epoch}, Step:{i}, Loss:{loss.numpy()[0]}')
+                
+                # Show the pictures
+                pic = transform_to_origin(state[0, 0])
+                output_img = reduction_model.inverse_transform(pic).reshape(28, 28)
+                plt.imshow(output_img, cmap='gray')
+                plt.title(f'QAE Step: {step}')
+                plt.savefig('ae.png')
+                plt.close()
+
+                plt.imshow(train_data[i*BATCH], cmap='gray')
+                plt.title(f'Origin Step: {step}')
+                plt.savefig('origin.png')
+                plt.close()
+
+                step_arr.append(step)
+                loss_arr.append(loss.numpy()[0])
+                plt.plot(step_arr, loss_arr)
+                plt.title('Loss')
+                plt.xlabel('Step')
+                plt.ylabel('Loss')
+                plt.savefig('loss.png')
+                plt.close()
 
             loss.backward()
             opt.minimize(loss)
-            classifier.clear_gradients()
+            net.clear_gradients()
             epoch_ls += loss.numpy().sum()
             data_len += BATCH
-        
-      
-            if (i) % 200 ==0:
-                print('------------------------------TEST---------------------------------')
-                summary_test_correct=0
-                for j in tqdm(range(test_len // BATCH)):
-                    #lll=test_data[j]
-                    label_test = (test_labels[j * BATCH:(j + 1) * BATCH].reshape(-1))
-                    label_test = np.asarray(label_test).astype('float64')
-                    #input_test=[]
-                    #input_test.append(QQQ1_code[j])
-                    input_test = QQQ1_code[j * BATCH:(j + 1) * BATCH]
-                    input_test = np.asarray(input_test)
-                    input_test = np.array(input_test).astype('float64')
-                    #pdb.set_trace()
-                    input_test = fluid.dygraph.to_variable(datapoints_transform_to_state_for_classifier(input_test,n_qubits=hyper_params['n_qubits']))
-                    loss, state = classifier(state_in=input_test,label=label_test)
-                    is_correct = (np.abs(state.reshape(-1)-label_test)<0.5)+0
-                    is_correct = is_correct.sum()
-                    #pdb.set_trace()
-                    summary_test_correct = summary_test_correct+is_correct
-                print( epoch ,summary_test_correct, test_len)
-                #print( epoch ,acc, test_acc)
+
         tr_ls.append(epoch_ls / data_len)
         print('Loss:', epoch_ls / data_len)
     print(tr_ls)
