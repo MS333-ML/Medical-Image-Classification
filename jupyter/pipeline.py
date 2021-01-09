@@ -1,13 +1,6 @@
-import copy
 import os
-import pdb
-import time
-from collections import OrderedDict
-
-import matplotlib
+import logging
 import numpy as np
-import paddle
-import pandas as pd
 import scipy
 from matplotlib import pyplot as plt
 from numpy import diag
@@ -18,14 +11,11 @@ from paddle.fluid.framework import ComplexVariable
 from paddle_quantum.circuit import UAnsatz
 from paddle_quantum.utils import (dagger, partial_trace, pauli_str_to_matrix,
                                   state_fidelity)
-from sklearn import preprocessing
 from sklearn.decomposition import PCA
-from sklearn.manifold import TSNE
-from sklearn.model_selection import train_test_split
 from tqdm import tqdm
 
 # load the dataset
-npz_file = np.load('../datasets/minidata.npz')
+npz_file = np.load('../datasets/pneumoniamnist.npz')
 train_images = npz_file['train_images']
 train_images = train_images.reshape(train_images.shape[0], -1)
 train_labels = npz_file['train_labels']
@@ -294,50 +284,62 @@ class Net(fluid.dygraph.Layer):
 
 
 if __name__ == '__main__':
+    log_name = 'pipeline.log'
+    if os.path.exists(log_name):
+        os.rename(dst=log_name+'.bak', src=log_name)
+    logging.basicConfig(level=logging.INFO,
+                        format='%(asctime)s %(filename)s[line:%(lineno)d] %(levelname)s %(message)s',
+                        datefmt='%a, %d %b %Y %H:%M:%S',
+                        filename=log_name,
+                        filemode='w')
     # pre train the QAE
-    LR = 0.01       # 设置学习速率
-    EPOCHS = 6
+    LR = 0.1       # 设置学习速率
+    EPOCHS = 5
+    if not os.path.exists('autoencoder.pdparams'):
+        logging.info('There is no pre-trained QAE, training QAE with LR={}, EPOCH={}'.format(LR, EPOCHS))
+        with fluid.dygraph.guard():
+            qae = QAE([theta_size])
 
-    with fluid.dygraph.guard():
-        qae = QAE([theta_size])
+            opt = fluid.optimizer.AdagradOptimizer(learning_rate=LR,
+                                                   parameter_list=qae.parameters())
 
-        opt = fluid.optimizer.AdagradOptimizer(learning_rate=LR,
-                                               parameter_list=qae.parameters())
+            tr_fid = []
+            tr_ls = []
+            best_fid = 0
 
-        tr_fid = []
-        tr_ls = []
-        best_fid = 0
+            for epoch in range(EPOCHS):
+                epoch_fid = []
+                epoch_ls = []
+                for i in tqdm(range(len((new_train)))):
+                    x = new_train[i]
+                    s = top_k_sum(x, 2**N_A)
+                    trainx = normalize2unitary(x)
+                    loss, rho_out, rho_encode = qae(trainx)
 
-        for epoch in range(EPOCHS):
-            epoch_fid = []
-            epoch_ls = []
-            for i in tqdm(range(len((new_train)))):
-                x = new_train[i]
-                s = top_k_sum(x, 2**N_A)
-                trainx = normalize2unitary(x)
-                loss, rho_out, rho_encode = qae(trainx)
+                    loss.backward()
+                    opt.minimize(loss)
+                    qae.clear_gradients()
+                    fid = state_fidelity(trainx, rho_out.numpy()) / s
+                    epoch_fid.append(fid)
+                    epoch_ls.append(loss.numpy())
+                tr_fid.append(np.square(np.array(epoch_fid).mean()))
+                tr_ls.append(np.array(epoch_ls).mean())
 
-                loss.backward()
-                opt.minimize(loss)
-                qae.clear_gradients()
-                fid = state_fidelity(trainx, rho_out.numpy()) / s
-                epoch_fid.append(fid)
-                epoch_ls.append(loss.numpy())
-            tr_fid.append(np.square(np.array(epoch_fid).mean()))
-            tr_ls.append(np.array(epoch_ls).mean())
+                if best_fid < np.square(np.array(epoch_fid).mean()):
+                    best_fid = np.square(np.array(epoch_fid).mean())
+                    fluid.save_dygraph(qae.state_dict(), "autoencoder")
+                
+                msg = 'epoch: {}, loss: {:.4f}, fid: {:.4f}'.format(
+                    str(epoch), np.array(epoch_ls).mean(), np.square(np.array(epoch_fid).mean()))
+                print(msg)
+                logging.info(msg)
+            plot_curve(tr_ls, tr_fid)
 
-            if best_fid < np.square(np.array(epoch_fid).mean()):
-                best_fid = np.square(np.array(epoch_fid).mean())
-                fluid.save_dygraph(qae.state_dict(), "autoencoder")
-
-            print('epoch:', epoch, 'loss:', '%.4f' % np.array(epoch_ls).mean(),
-                  'fid:', '%.4f' % np.square(np.array(epoch_fid).mean()))
-        plot_curve(tr_ls, tr_fid)
-
+    logging.info('pre-trained QAE exists, traing Q-classifier')
     # train the classifier
     step = 1
     BATCH = 1
-    EPOCH = 10
+    EPOCH = 5
     total_loss = 0.0
 
     with fluid.dygraph.guard():
@@ -368,7 +370,7 @@ if __name__ == '__main__':
                 epoch_ls += loss.numpy().sum()
                 data_len += BATCH
 
-                if (i+1) % 1000 == 0:
+                if (i+1) % 200 == 0:
                     print(
                         '------------------------------TEST---------------------------------')
                     summary_test_correct = 0
@@ -387,4 +389,7 @@ if __name__ == '__main__':
                         is_correct = is_correct.sum()
 
                         summary_test_correct = summary_test_correct+is_correct
-                    print(epoch, summary_test_correct, len(test_labels))
+                    msg1 = 'epoch: {}, [{}/{}]'.format(
+                        str(epoch), summary_test_correct, len(test_labels))
+                    print(msg1)
+                    logging.info(msg1)
