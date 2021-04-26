@@ -1,14 +1,13 @@
-import os
 import logging
+import os
+
 import numpy as np
 import scipy
 from matplotlib import pyplot as plt
-from numpy import diag
-from numpy import pi as PI
+from numpy import diag, pi as PI
 from paddle import fluid
-from paddle.complex import kron, matmul, trace, transpose
-from paddle.fluid.framework import ComplexVariable
-from paddle_quantum.circuit import UAnsatz
+from paddle import kron, matmul, trace
+from paddle_quantum.circuit import UAnsatz, to_tensor
 from paddle_quantum.utils import (dagger, partial_trace, pauli_str_to_matrix,
                                   state_fidelity)
 from sklearn.decomposition import PCA
@@ -37,46 +36,46 @@ for i in range(len(new_test)):
     new_test[i] = new_test[i] / new_test[i].sum()
 #                    ================================================QAE===============================================
 # set up the circuit
-N_A = 2        # the number of qubits in subsystem A
-N_B = 1        # the number of qubits in subsystem B
+N_A = 2  # the number of qubits in subsystem A
+N_B = 1  # the number of qubits in subsystem B
 N = N_A + N_B  # the total number of system
 SEED = 14
 
-scipy.random.seed(1)                    # use fixed random seed
-V = scipy.stats.unitary_group.rvs(2**N)  # randomly generate a unitary matrix V
-V_H = V.conj().T                        # V_dagger
+scipy.random.seed(1)  # use fixed random seed
+V = scipy.stats.unitary_group.rvs(2 ** N)  # randomly generate a unitary matrix V
+V_H = V.conj().T  # V_dagger
 
-cir_depth = 6                        # the depth of the circuit
-block_len = 2                        # the length of each module
-theta_size = N*block_len*cir_depth   # the shape of the parameter of the network
+cir_depth = 6  # the depth of the circuit
+block_len = 2  # the length of each module
+theta_size = N * block_len * cir_depth  # the shape of the parameter of the network
 
 rho_C = np.diag([1, 0]).astype('complex128')
+
 
 # Encoder
 
 
 def Encoder(theta):
-
     # use UAnsatz to initialize the network
     cir = UAnsatz(N)
 
     for layer_num in range(cir_depth):
 
         for which_qubit in range(N):
-            cir.ry(theta[block_len*layer_num*N + which_qubit], which_qubit)
-            cir.rz(theta[(block_len*layer_num + 1)
+            cir.ry(theta[block_len * layer_num * N + which_qubit], which_qubit)
+            cir.rz(theta[(block_len * layer_num + 1)
                          * N + which_qubit], which_qubit)
 
-        for which_qubit in range(N-1):
+        for which_qubit in range(N - 1):
             cir.cnot([which_qubit, which_qubit + 1])
-        cir.cnot([N-1, 0])
+        cir.cnot([N - 1, 0])
 
     return cir.U
 
 
 def normalize2unitary(x):
     rho_in_mols = x
-    rho_in_mols = (V@diag(rho_in_mols)@V_H).astype('complex128')
+    rho_in_mols = (V @ diag(rho_in_mols) @ V_H).astype('complex128')
     return rho_in_mols
 
 
@@ -111,7 +110,7 @@ class QAE(fluid.dygraph.Layer):
     """
 
     def __init__(self, shape, param_attr=fluid.initializer.Uniform(
-            low=0.0, high=2 * np.pi, seed=SEED), dtype='float64'):
+        low=0.0, high=2 * np.pi, seed=SEED), dtype='float64'):
         super(QAE, self).__init__()
 
         # Numpy array -> variable
@@ -136,9 +135,10 @@ class QAE(fluid.dygraph.Layer):
 
         zero_Hamiltonian = fluid.dygraph.to_variable(
             np.diag([1, 0]).astype('complex128'))
-        loss = 1 - (trace(matmul(zero_Hamiltonian, rho_trash))).real
+        loss = 1 - (trace(matmul(zero_Hamiltonian, rho_trash))).real()
 
         return loss, rho_out, rho_encode
+
 
 #                    ================================================QClassifier===============================================
 
@@ -204,9 +204,9 @@ def U_theta(theta, n, depth):
         cir.rz(theta[i][2], i)
 
     for d in range(3, depth + 3):
-        for i in range(n-1):
+        for i in range(n - 1):
             cir.cnot([i, i + 1])
-        cir.cnot([n-1, 0])
+        cir.cnot([n - 1, 0])
         for i in range(n):
             cir.ry(theta[i][d], i)
 
@@ -228,7 +228,7 @@ class Net(fluid.dygraph.Layer):
     """
 
     def __init__(self,
-                 n,      # number of qubits
+                 n,  # number of qubits
                  depth,  # circuit depth
                  seed_paras=1,
                  dtype='float64'):
@@ -240,7 +240,7 @@ class Net(fluid.dygraph.Layer):
         self.theta = self.create_parameter(
             shape=[n, depth + 3],
             attr=fluid.initializer.Uniform(
-                low=0.0, high=2*PI, seed=seed_paras),
+                low=0.0, high=2 * PI, seed=seed_paras),
             dtype=dtype,
             is_bias=False)
 
@@ -273,7 +273,7 @@ class Net(fluid.dygraph.Layer):
         E_Z = trace(matmul(state_out, Ob))
 
         # map <Z> to the predict label
-        state_predict = E_Z.real * 0.5 + 0.5 + self.bias
+        state_predict = E_Z.real() * 0.5 + 0.5 + self.bias
         loss = fluid.layers.reduce_mean((state_predict - label_pp) ** 2)
 
         is_correct = fluid.layers.where(
@@ -286,14 +286,14 @@ class Net(fluid.dygraph.Layer):
 if __name__ == '__main__':
     log_name = 'pipeline.log'
     if os.path.exists(log_name):
-        os.rename(dst=log_name+'.bak', src=log_name)
+        os.rename(dst=log_name + '.bak', src=log_name)
     logging.basicConfig(level=logging.INFO,
                         format='%(asctime)s %(filename)s[line:%(lineno)d] %(levelname)s %(message)s',
                         datefmt='%a, %d %b %Y %H:%M:%S',
                         filename=log_name,
                         filemode='w')
     # pre train the QAE
-    LR = 0.1       # 设置学习速率
+    LR = 0.1  # 设置学习速率
     EPOCHS = 5
     if not os.path.exists('autoencoder.pdparams'):
         logging.info('There is no pre-trained QAE, training QAE with LR={}, EPOCH={}'.format(LR, EPOCHS))
@@ -312,7 +312,7 @@ if __name__ == '__main__':
                 epoch_ls = []
                 for i in tqdm(range(len((new_train)))):
                     x = new_train[i]
-                    s = top_k_sum(x, 2**N_A)
+                    s = top_k_sum(x, 2 ** N_A)
                     trainx = normalize2unitary(x)
                     loss, rho_out, rho_encode = qae(trainx)
 
@@ -328,7 +328,7 @@ if __name__ == '__main__':
                 if best_fid < np.square(np.array(epoch_fid).mean()):
                     best_fid = np.square(np.array(epoch_fid).mean())
                     fluid.save_dygraph(qae.state_dict(), "autoencoder")
-                
+
                 msg = 'epoch: {}, loss: {:.4f}, fid: {:.4f}'.format(
                     str(epoch), np.array(epoch_ls).mean(), np.square(np.array(epoch_fid).mean()))
                 print(msg)
@@ -343,7 +343,7 @@ if __name__ == '__main__':
     total_loss = 0.0
 
     with fluid.dygraph.guard():
-        net = Net(n=2, depth=3, seed_paras=19)
+        net = Net(n=10, depth=3, seed_paras=19)
         opt = fluid.optimizer.AdamOptimizer(
             learning_rate=0.01, parameter_list=net.parameters())
         ae = QAE([theta_size])
@@ -352,12 +352,13 @@ if __name__ == '__main__':
         for epoch in range(EPOCH):
             epoch_ls = 0
             data_len = 0
-            for i in tqdm(range(len((new_train)))):
-                step = step+1
+            for i in tqdm(range(len(new_train))):
+                step = step + 1
                 ae.set_dict(para_state_dict)
                 x = new_train[i]
                 trainx = normalize2unitary(x)
-                loss, rho_out, rho_encode = ae(trainx)
+                # loss, rho_out, rho_encode = ae(trainx)
+                rho_encode = to_tensor(datapoints_transform_to_state(trainx, 10))
                 inputy = (train_labels[i * BATCH:(i + 1) * BATCH].reshape(-1))
                 trainy = np.asarray(inputy).astype('float64')
                 loss, acc, state = net(state_in=rho_encode, label=trainy)
@@ -370,7 +371,7 @@ if __name__ == '__main__':
                 epoch_ls += loss.numpy().sum()
                 data_len += BATCH
 
-                if (i+1) % 200 == 0:
+                if (i + 1) % 200 == 0:
                     print(
                         '------------------------------TEST---------------------------------')
                     summary_test_correct = 0
@@ -384,11 +385,11 @@ if __name__ == '__main__':
                         trainy = np.asarray(inputy).astype('float64')
                         loss, acc, state = net(
                             state_in=rho_encode, label=trainy)
-                        is_correct = (np.abs(state.reshape(-1)-trainy) < 0.5)+0
+                        is_correct = (np.abs(state.reshape(-1) - trainy) < 0.5) + 0
 
                         is_correct = is_correct.sum()
 
-                        summary_test_correct = summary_test_correct+is_correct
+                        summary_test_correct = summary_test_correct + is_correct
                     msg1 = 'epoch: {}, [{}/{}]'.format(
                         str(epoch), summary_test_correct, len(test_labels))
                     print(msg1)
