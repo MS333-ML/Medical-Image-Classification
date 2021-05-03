@@ -379,7 +379,8 @@ if __name__ == '__main__':
                         ae.set_dict(para_state_dict)
                         inputx = new_test[j]
                         valx = normalize2unitary(inputx)
-                        loss, rho_out, rho_encode = ae(valx)
+                        # loss, rho_out, rho_encode = ae(valx)
+                        rho_encode = to_tensor(datapoints_transform_to_state(valx, 10))
                         inputy = (
                             test_labels[j * BATCH:(j + 1) * BATCH].reshape(-1))
                         trainy = np.asarray(inputy).astype('float64')
