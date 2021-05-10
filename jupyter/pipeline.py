@@ -1,7 +1,9 @@
 import logging
+from math import ceil, log2
 import os
 
 import numpy as np
+from numpy import linalg
 import scipy
 from matplotlib import pyplot as plt
 from numpy import diag, pi as PI
@@ -14,7 +16,7 @@ from sklearn.decomposition import PCA
 from tqdm import tqdm
 
 # load the dataset
-npz_file = np.load('../datasets/pneumoniamnist.npz')
+npz_file = np.load('datasets/pneumoniamnist.npz')
 train_images = npz_file['train_images']
 train_images = train_images.reshape(train_images.shape[0], -1)
 train_labels = npz_file['train_labels']
@@ -39,6 +41,8 @@ for i in range(len(new_test)):
 N_A = 2  # the number of qubits in subsystem A
 N_B = 1  # the number of qubits in subsystem B
 N = N_A + N_B  # the total number of system
+
+N=ceil(log2(train_images.shape[1]))
 SEED = 14
 
 scipy.random.seed(1)  # use fixed random seed
@@ -75,7 +79,7 @@ def Encoder(theta):
 
 def normalize2unitary(x):
     rho_in_mols = x
-    rho_in_mols = (V @ diag(rho_in_mols) @ V_H).astype('complex128')
+    rho_in_mols = x/linalg.norm(x)
     return rho_in_mols
 
 
@@ -167,7 +171,7 @@ def datapoints_transform_to_state(data, n_qubits):
     :param n_qubits: the number of qubits to which the data transformed
     :return: shape [-1, 1, 2 ^ n_qubits]
     """
-    dim1, dim2 = data.shape
+    dim1 = data.shape
     res = []
     for sam in range(dim1):
         res_state = 1.
@@ -270,7 +274,7 @@ class Net(fluid.dygraph.Layer):
 
         state_out = matmul(matmul(state_in, Utheta), U_dagger)
 
-        E_Z = trace(matmul(state_out, Ob))
+        E_Z = matmul(state_out, Ob)
 
         # map <Z> to the predict label
         state_predict = E_Z.real() * 0.5 + 0.5 + self.bias
@@ -295,47 +299,47 @@ if __name__ == '__main__':
     # pre train the QAE
     LR = 0.1  # 设置学习速率
     EPOCHS = 5
-    if not os.path.exists('autoencoder.pdparams'):
-        logging.info('There is no pre-trained QAE, training QAE with LR={}, EPOCH={}'.format(LR, EPOCHS))
-        with fluid.dygraph.guard():
-            qae = QAE([theta_size])
+    # if not os.path.exists('autoencoder.pdparams'):
+    #     logging.info('There is no pre-trained QAE, training QAE with LR={}, EPOCH={}'.format(LR, EPOCHS))
+    #     with fluid.dygraph.guard():
+    #         qae = QAE([theta_size])
 
-            opt = fluid.optimizer.AdagradOptimizer(learning_rate=LR,
-                                                   parameter_list=qae.parameters())
+    #         opt = fluid.optimizer.AdagradOptimizer(learning_rate=LR,
+    #                                                parameter_list=qae.parameters())
 
-            tr_fid = []
-            tr_ls = []
-            best_fid = 0
+    #         tr_fid = []
+    #         tr_ls = []
+    #         best_fid = 0
 
-            for epoch in range(EPOCHS):
-                epoch_fid = []
-                epoch_ls = []
-                for i in tqdm(range(len((new_train)))):
-                    x = new_train[i]
-                    s = top_k_sum(x, 2 ** N_A)
-                    trainx = normalize2unitary(x)
-                    loss, rho_out, rho_encode = qae(trainx)
+    #         for epoch in range(EPOCHS):
+    #             epoch_fid = []
+    #             epoch_ls = []
+    #             for i in tqdm(range(len((new_train)))):
+    #                 x = new_train[i]
+    #                 s = top_k_sum(x, 2 ** N_A)
+    #                 trainx = normalize2unitary(x)
+    #                 loss, rho_out, rho_encode = qae(trainx)
 
-                    loss.backward()
-                    opt.minimize(loss)
-                    qae.clear_gradients()
-                    fid = state_fidelity(trainx, rho_out.numpy()) / s
-                    epoch_fid.append(fid)
-                    epoch_ls.append(loss.numpy())
-                tr_fid.append(np.square(np.array(epoch_fid).mean()))
-                tr_ls.append(np.array(epoch_ls).mean())
+    #                 loss.backward()
+    #                 opt.minimize(loss)
+    #                 qae.clear_gradients()
+    #                 fid = state_fidelity(trainx, rho_out.numpy()) / s
+    #                 epoch_fid.append(fid)
+    #                 epoch_ls.append(loss.numpy())
+    #             tr_fid.append(np.square(np.array(epoch_fid).mean()))
+    #             tr_ls.append(np.array(epoch_ls).mean())
 
-                if best_fid < np.square(np.array(epoch_fid).mean()):
-                    best_fid = np.square(np.array(epoch_fid).mean())
-                    fluid.save_dygraph(qae.state_dict(), "autoencoder")
+    #             if best_fid < np.square(np.array(epoch_fid).mean()):
+    #                 best_fid = np.square(np.array(epoch_fid).mean())
+    #                 fluid.save_dygraph(qae.state_dict(), "autoencoder")
 
-                msg = 'epoch: {}, loss: {:.4f}, fid: {:.4f}'.format(
-                    str(epoch), np.array(epoch_ls).mean(), np.square(np.array(epoch_fid).mean()))
-                print(msg)
-                logging.info(msg)
-            plot_curve(tr_ls, tr_fid)
+    #             msg = 'epoch: {}, loss: {:.4f}, fid: {:.4f}'.format(
+    #                 str(epoch), np.array(epoch_ls).mean(), np.square(np.array(epoch_fid).mean()))
+    #             print(msg)
+    #             logging.info(msg)
+    #         plot_curve(tr_ls, tr_fid)
 
-    logging.info('pre-trained QAE exists, traing Q-classifier')
+    # logging.info('pre-trained QAE exists, traing Q-classifier')
     # train the classifier
     step = 1
     BATCH = 1
@@ -352,13 +356,15 @@ if __name__ == '__main__':
         for epoch in range(EPOCH):
             epoch_ls = 0
             data_len = 0
-            for i in tqdm(range(len(new_train))):
+            for i in tqdm(range(len(train_images))):
                 step = step + 1
                 ae.set_dict(para_state_dict)
-                x = new_train[i]
-                trainx = normalize2unitary(x)
+                x = normalize2unitary(train_images[i])
+                trainx = np.zeros(2**N)
+                trainx[:x.shape[0]] = x
+
                 # loss, rho_out, rho_encode = ae(trainx)
-                rho_encode = to_tensor(datapoints_transform_to_state(trainx, 10))
+                rho_encode = to_tensor(trainx)
                 inputy = (train_labels[i * BATCH:(i + 1) * BATCH].reshape(-1))
                 trainy = np.asarray(inputy).astype('float64')
                 loss, acc, state = net(state_in=rho_encode, label=trainy)
@@ -377,10 +383,12 @@ if __name__ == '__main__':
                     summary_test_correct = 0
                     for j in (range(len((new_test)))):
                         ae.set_dict(para_state_dict)
-                        inputx = new_test[j]
-                        valx = normalize2unitary(inputx)
-                        # loss, rho_out, rho_encode = ae(valx)
-                        rho_encode = to_tensor(datapoints_transform_to_state(valx, 10))
+                        inputx = test_images[j]
+                        x = normalize2unitary(inpux)
+                        valx = np.zeros(2**N)
+                        valx[:x.shape[0]]=x
+                        # loss, rho_out, rho_encode = ae(trainx)
+                        rho_encode = to_tensor(valx)
                         inputy = (
                             test_labels[j * BATCH:(j + 1) * BATCH].reshape(-1))
                         trainy = np.asarray(inputy).astype('float64')
